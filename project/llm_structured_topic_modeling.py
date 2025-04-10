@@ -74,6 +74,7 @@ openai.api_key = OPENAI_API_KEY
 DATA_PATH = "data/mentalhealth_post_features_tfidf_256.csv"
 RESULTS_DIR = "results"
 PILOT_SAMPLE_SIZE = 5
+RANDOM_SEED = 42  # Fixed random seed for deterministic sampling
 
 # Create results directory if it doesn't exist
 if not os.path.exists(RESULTS_DIR):
@@ -470,27 +471,81 @@ def get_representative_docs(data, lda_model, corpus, n_docs=3):
     return topic_docs
 
 
-def run_pilot(df=None):
+def run_pilot(df=None, skip_existing=True):
     """
     Run a pilot test on a small sample of the data.
 
     Args:
         df: DataFrame containing the data (if None, will be loaded)
+        skip_existing: If True, skip processing if pilot results already exist
 
     Returns:
         Results of the pilot test
     """
     print(f"\n🧪 Running pilot test on {PILOT_SAMPLE_SIZE} records")
-
+    
+    pilot_results_path = os.path.join(RESULTS_DIR, "pilot_results.csv")
+    
     # Load data if not provided
     if df is None:
         df = load_data()
+    
+    # Take a deterministic sample using the random seed
+    # Instead of head(), we use sample() with a fixed seed for deterministic selection
+    sample_df = df.sample(PILOT_SAMPLE_SIZE, random_state=RANDOM_SEED)
+    
+    # Ensure we have an 'id' column for tracking
+    if 'id' not in sample_df.columns:
+        sample_df['id'] = sample_df.index.astype(str)
+    
+    # Check if pilot results already exist and we want to skip processing
+    existing_results_df = None
+    if skip_existing and os.path.exists(pilot_results_path):
+        print(f"Pilot results exist at {pilot_results_path}")
+        try:
+            existing_results_df = pd.read_csv(pilot_results_path)
+            print(f"Loaded {len(existing_results_df)} existing pilot results")
+            
+            # If we have all the posts we need already processed, return them
+            if set(sample_df['id'].astype(str)).issubset(set(existing_results_df['id'].astype(str))):
+                print("All selected posts have already been processed")
+                # Filter to only include the posts in our current sample
+                filtered_results = existing_results_df[
+                    existing_results_df['id'].astype(str).isin(sample_df['id'].astype(str))
+                ]
+                return filtered_results
+            else:
+                print("Some selected posts have not been processed yet")
+        except Exception as e:
+            print(f"Error loading existing pilot results: {e}")
+            print("Will process all selected posts")
+            existing_results_df = None
 
-    # Take a small sample
-    sample_df = df.head(PILOT_SAMPLE_SIZE)
-
-    # Process the sample
-    results_df = process_batch(sample_df)
+    # Process the sample, skipping any already processed posts
+    if existing_results_df is not None:
+        # Find posts that need processing
+        already_processed_ids = set(existing_results_df['id'].astype(str))
+        new_posts_df = sample_df[~sample_df['id'].astype(str).isin(already_processed_ids)]
+        
+        if len(new_posts_df) > 0:
+            print(f"Processing {len(new_posts_df)} new posts")
+            new_results_df = process_batch(new_posts_df)
+            
+            # Combine with existing results
+            existing_to_keep = existing_results_df[
+                existing_results_df['id'].astype(str).isin(sample_df['id'].astype(str))
+            ]
+            results_df = pd.concat([existing_to_keep, new_results_df], ignore_index=True)
+        else:
+            print("No new posts to process")
+            # Filter existing results to only include our current sample
+            results_df = existing_results_df[
+                existing_results_df['id'].astype(str).isin(sample_df['id'].astype(str))
+            ]
+    else:
+        # Process all posts in the sample
+        print(f"Processing all {len(sample_df)} selected posts")
+        results_df = process_batch(sample_df)
 
     print("\nPilot test results sample:")
     for i, row in results_df.iterrows():
@@ -584,31 +639,92 @@ def run_topic_modeling(processed_df, use_structured=True, num_topics=None):
     return dictionary, corpus, lda_model
 
 
-def run_full_pipeline(df=None, sample_size=None):
+def run_full_pipeline(df=None, sample_size=None, skip_existing=True):
     """
     Run the full pipeline on all data or a sample.
 
     Args:
         df: DataFrame containing the data (if None, will be loaded)
         sample_size: Size of the sample to use (if None, use all data)
+        skip_existing: If True, skip processing if results already exist
 
     Returns:
         Results from processing all data
     """
     print("\n🚀 Running full pipeline")
     start_time = time.time()
-
+    
+    # Define the path for processed data
+    processed_data_path = os.path.join(RESULTS_DIR, "processed_data.csv")
+    
     # Load data if not provided
     if df is None:
         df = load_data()
 
-    # Take a sample if requested
+    # Take a sample if requested - using the fixed random seed for deterministic sampling
     if sample_size is not None:
-        print(f"Using a sample of {sample_size} records")
-        df = df.sample(sample_size, random_state=42)
+        print(f"Using a deterministic sample of {sample_size} records (seed: {RANDOM_SEED})")
+        df = df.sample(sample_size, random_state=RANDOM_SEED)
+    
+    # Ensure we have an 'id' column for tracking
+    if 'id' not in df.columns:
+        df['id'] = df.index.astype(str)
+    
+    # Check if processed data already exists and we want to skip processing
+    existing_processed_df = None
+    if skip_existing and os.path.exists(processed_data_path):
+        print(f"Processed data exists at {processed_data_path}")
+        try:
+            existing_processed_df = pd.read_csv(processed_data_path)
+            print(f"Loaded {len(existing_processed_df)} existing processed records")
+            
+            # Check if all the posts we need are already processed
+            current_ids = set(df['id'].astype(str))
+            existing_ids = set(existing_processed_df['id'].astype(str))
+            
+            if current_ids.issubset(existing_ids):
+                print("All selected posts have already been processed")
+                # Filter to only include the posts in our current selection
+                filtered_results = existing_processed_df[
+                    existing_processed_df['id'].astype(str).isin(df['id'].astype(str))
+                ]
+                
+                # Run topic modeling on filtered data
+                print("\nRunning topic modeling with existing processed data...")
+                structured_results = run_topic_modeling(filtered_results, use_structured=True)
+                baseline_results = run_topic_modeling(filtered_results, use_structured=False)
+                
+                return filtered_results, structured_results, baseline_results
+        except Exception as e:
+            print(f"Error loading existing processed data: {e}")
+            print("Will process all selected posts")
+            existing_processed_df = None
 
-    # Process all data
-    processed_df = process_batch(df)
+    # Process data, skipping any already processed posts
+    if existing_processed_df is not None:
+        # Find posts that need processing
+        already_processed_ids = set(existing_processed_df['id'].astype(str))
+        new_posts_df = df[~df['id'].astype(str).isin(already_processed_ids)]
+        
+        if len(new_posts_df) > 0:
+            print(f"Processing {len(new_posts_df)} new posts")
+            new_results_df = process_batch(new_posts_df)
+            
+            # Combine with existing results that are in our current selection
+            existing_to_keep = existing_processed_df[
+                existing_processed_df['id'].astype(str).isin(df['id'].astype(str))
+            ]
+            processed_df = pd.concat([existing_to_keep, new_results_df], ignore_index=True)
+        else:
+            print("No new posts to process")
+            # Filter existing results to only include our current selection
+            processed_df = existing_processed_df[
+                existing_processed_df['id'].astype(str).isin(df['id'].astype(str))
+            ]
+    else:
+        # Process all posts
+        print(f"Processing all {len(df)} selected posts")
+        processed_df = process_batch(df)
 
     # Save processed data
     processed_df.to_csv(os.path.join(RESULTS_DIR, "processed_data.csv"), index=False)
@@ -643,8 +759,11 @@ def main():
     else:
         print("✅ OpenAI API key loaded successfully.")
 
+    # Ask if we should skip existing processed data
+    skip_existing = input("Skip processing if results already exist? (y/n, default: y): ").lower() != "n"
+    
     # Run the pilot test
-    pilot_df = run_pilot()
+    pilot_df = run_pilot(skip_existing=skip_existing)
 
     # Ask for confirmation before running the full pipeline
     user_input = input("\nProceed with full pipeline run? (y/n): ")
@@ -655,7 +774,7 @@ def main():
         if sample_size <= 0:
             sample_size = None
 
-        run_full_pipeline(sample_size=sample_size)
+        run_full_pipeline(sample_size=sample_size, skip_existing=skip_existing)
     else:
         print("Full pipeline run cancelled")
 
