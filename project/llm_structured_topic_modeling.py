@@ -70,11 +70,14 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# Configuration
-DATA_PATH = "data/mentalhealth_post_features_tfidf_256.csv"
-RESULTS_DIR = "results"
-PILOT_SAMPLE_SIZE = 5
-RANDOM_SEED = 42  # Fixed random seed for deterministic sampling
+# Constants
+DATA_PATH = "data/mentalhealth_post_features_tfidf_256.csv"  # Path to the data file
+RESULTS_DIR = "results"  # Directory to store results
+PILOT_SAMPLE_SIZE = 5  # Number of records to use for pilot testing
+RANDOM_SEED = 42  # Random seed for reproducibility
+
+# Model selection
+DEFAULT_MODEL = "gpt-4o-mini"  # Default model to use (supports Structured Outputs)
 
 # Create results directory if it doesn't exist
 if not os.path.exists(RESULTS_DIR):
@@ -151,83 +154,93 @@ def lemmatize_text(text):
     return tokens
 
 
-def extract_structured_data_with_llm(text, model="gpt-3.5-turbo"):
+def analyze_text(text):
     """
-    Extract structured data from text using OpenAI's GPT model.
-
+    Analyze a single text entry and return structured results using OpenAI's Structured Outputs feature.
+    
     Args:
-        text: The text to analyze
-        model: The OpenAI model to use
-
+        text: Text to analyze
+        
     Returns:
-        Dictionary containing structured data
+        Dictionary with structured analysis results
     """
-    if not OPENAI_API_KEY:
-        print("Warning: OpenAI API key not found. Returning empty structure.")
-        return {
-            "main_issue": "",
-            "emotional_tone": "",
-            "cognitive_stress_markers": "",
-            "suicidal_red_flags": "",
-            "keywords": [],
-        }
-
-    # Truncate text if it's too long (to save tokens)
-    max_length = 4000
-    if len(text) > max_length:
-        text = text[:max_length] + "..."
-
-    # Define the prompt for structured extraction
-    prompt = f"""
-    Read the following mental health forum post carefully. Then provide a JSON with the following fields:
+    # Initialize OpenAI client
+    client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     
-    1. main_issue: The primary mental health concern or problem discussed
-    2. emotional_tone: The dominant emotions expressed (e.g., anxiety, depression, anger)
-    3. cognitive_stress_markers: Any cognitive distortions or stress indicators
-    4. suicidal_red_flags: Any explicit or implicit references to self-harm or suicide
-    5. keywords: A list of 5-10 key terms that best represent the content
+    # Define the system prompt
+    system_prompt = """You are an AI assistant trained to analyze mental health text data.
+    Extract key information from the provided text and categorize it according to the schema."""
     
-    Post: {text}
-    
-    JSON response:
-    """
-
     try:
-        response = openai.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a mental health text analyzer that extracts structured information from forum posts.",
+        # Define the schema for structured output
+        schema = {
+            "type": "object",
+            "properties": {
+                "themes": {
+                    "type": "array",
+                    "description": "Main themes or topics identified in the text",
+                    "items": {"type": "string"}
                 },
-                {"role": "user", "content": prompt},
+                "emotional_tone": {
+                    "type": "string",
+                    "description": "Overall emotional tone of the text",
+                    "enum": ["positive", "negative", "neutral", "mixed", "unknown"]
+                },
+                "concerns": {
+                    "type": "array",
+                    "description": "Key concerns or issues mentioned in the text",
+                    "items": {"type": "string"}
+                },
+                "cognitive_patterns": {
+                    "type": "array",
+                    "description": "Any cognitive patterns or distortions identified in the text",
+                    "items": {"type": "string"}
+                },
+                "social_context": {
+                    "type": "array",
+                    "description": "Social context or relationships mentioned in the text",
+                    "items": {"type": "string"}
+                }
+            },
+            "required": ["themes", "emotional_tone", "concerns", "cognitive_patterns", "social_context"],
+            "additionalProperties": False
+        }
+        
+        # Make the API call using the new Responses API with Structured Outputs
+        response = client.responses.create(
+            model="gpt-4o-mini",  # Using gpt-4o-mini for cost efficiency with Structured Outputs support
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
             ],
-            temperature=0.3,
-            max_tokens=500,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "mental_health_analysis",
+                    "schema": schema,
+                    "strict": True
+                }
+            }
         )
-
-        # Extract the JSON response
-        json_str = response.choices[0].message.content
-
-        # Clean up the JSON string if needed
-        json_str = json_str.strip()
-        if json_str.startswith("```json"):
-            json_str = json_str[7:]
-        if json_str.endswith("```"):
-            json_str = json_str[:-3]
-
-        # Parse the JSON
-        structured_data = json.loads(json_str)
-        return structured_data
-
+        
+        # Extract the structured result
+        structured_result = json.loads(response.output_text)
+        
+        # Add the original text to the result
+        structured_result["original_text"] = text
+        
+        return structured_result
+    
     except Exception as e:
-        print(f"Error calling OpenAI API: {e}")
+        print(f"Error analyzing text: {e}")
+        # Return a minimal result in case of error
         return {
-            "main_issue": "",
-            "emotional_tone": "",
-            "cognitive_stress_markers": "",
-            "suicidal_red_flags": "",
-            "keywords": [],
+            "themes": ["Error in analysis"],
+            "emotional_tone": "unknown",
+            "concerns": [],
+            "cognitive_patterns": [],
+            "social_context": [],
+            "original_text": text
         }
 
 
@@ -244,74 +257,60 @@ def create_structured_text(structured_data):
     structured_text = ""
 
     # Add main issue
-    if structured_data.get("main_issue"):
-        structured_text += f"ISSUE: {structured_data['main_issue']} "
+    if structured_data.get("themes"):
+        structured_text += f"THEMES: {', '.join(structured_data['themes'])} "
 
     # Add emotional tone
     if structured_data.get("emotional_tone"):
         structured_text += f"EMOTION: {structured_data['emotional_tone']} "
 
     # Add cognitive stress markers
-    if structured_data.get("cognitive_stress_markers"):
-        structured_text += f"COGNITIVE: {structured_data['cognitive_stress_markers']} "
+    if structured_data.get("cognitive_patterns"):
+        structured_text += f"COGNITIVE: {', '.join(structured_data['cognitive_patterns'])} "
 
     # Add suicidal red flags
-    if structured_data.get("suicidal_red_flags"):
-        structured_text += f"SUICIDE_RISK: {structured_data['suicidal_red_flags']} "
+    if structured_data.get("concerns"):
+        structured_text += f"CONCERNS: {', '.join(structured_data['concerns'])} "
 
     # Add keywords
-    if structured_data.get("keywords") and isinstance(
-        structured_data["keywords"], list
-    ):
-        keywords = " ".join(structured_data["keywords"])
+    if structured_data.get("social_context"):
+        keywords = ', '.join(structured_data["social_context"])
         structured_text += f"KEYWORDS: {keywords}"
 
     return structured_text
 
 
-def process_batch(df, use_llm=True):
+def process_batch(df, model=DEFAULT_MODEL):
     """
-    Process a batch of data.
-
+    Process a batch of text entries.
+    
     Args:
-        df: DataFrame containing the batch to process
-        use_llm: Whether to use LLM for structured extraction
-
+        df: DataFrame containing the text data
+        model: Model to use for analysis (must support Structured Outputs)
+        
     Returns:
-        DataFrame with processed data
+        DataFrame with processed results
     """
     results = []
-
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing posts"):
-        # Extract text from row
-        text = row.get("post", "")
-
-        # Skip empty text
-        if not text or not isinstance(text, str):
-            continue
-
-        result = {
-            "id": row.get("id", idx),
-            "original_text": text,
-            "processed_text": preprocess_text(text),
-        }
-
-        # Use LLM for structured extraction if requested
-        if use_llm:
-            structured_data = extract_structured_data_with_llm(text)
-            structured_text = create_structured_text(structured_data)
-            result["structured_data"] = structured_data
-            result["structured_text"] = structured_text
-            # Create tokens from structured text
-            result["structured_tokens"] = lemmatize_text(structured_text)
-
-        # Create tokens from original text (for baseline comparison)
-        result["baseline_tokens"] = lemmatize_text(result["processed_text"])
-
-        # Add to results
+    
+    # Process each text entry
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing texts"):
+        text = row["post"]
+        result = analyze_text(text)
+        
+        # Add the index to the result
+        result["id"] = row["id"] if "id" in row else str(idx)
+        
+        # Create structured text representation
+        structured_text = create_structured_text(result)
+        result["structured_text"] = structured_text
+        
         results.append(result)
-
-    return pd.DataFrame(results)
+    
+    # Convert results to DataFrame
+    results_df = pd.DataFrame(results)
+    
+    return results_df
 
 
 def build_lda_model(texts, num_topics=10, passes=20):
