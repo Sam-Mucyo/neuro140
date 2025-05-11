@@ -1,2 +1,8 @@
+.DS_Store
 env
 project/data
+
+*.aux
+*.out
+*.synctex.gz
+

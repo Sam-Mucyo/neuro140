@@ -1,5 +1,10 @@
-matplotlib
-numpy
 pandas
-scikit-learn
+numpy
+nltk
+gensim
+python-dotenv
+matplotlib
 seaborn
+tqdm
+openai
+scikit-learn
