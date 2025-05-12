@@ -45,15 +45,23 @@ OPENAI_API_KEY=your_api_key_here
 
 ## Data
 
-The `data/` directory contains TF-IDF feature vectors extracted from various mental health-related subreddits, with files organized by subreddit, time period (pre/post COVID-19), and year.
+The `data/` directory contains TF-IDF feature vectors extracted from various mental health-related subreddits, with files organized by subreddit, time period (pre/post COVID-19), and year. You can download the dataset from [here](https://zenodo.org/records/3941387) (we gitignored it for size reasons).
 
 ## Running the Analysis
 
-- `eda.ipynb`: Exploratory data analysis notebook
-- `traditional_lda.ipynb`: Traditional LDA topic modeling
-- `comparative_analysis.ipynb`: Comparison of traditional and LLM-based topic modeling
-- `pipeline.py`: End-to-end topic modeling pipeline
-- `llm_structured_topic_modeling.py`: Implementation of LLM-based structured topic modeling
+### Notebooks (in `experiments/`)
+
+- `experiments/eda.ipynb`: Exploratory data analysis notebook
+- `experiments/traditional_lda.ipynb`: Traditional LDA topic modeling
+- `experiments/comparative_analysis.ipynb`: Comparison of traditional and LLM-based topic modeling and evaluation
+
+### Scripts (in `src/`)
+
+- `src/pipeline.py`: End-to-end topic modeling pipeline (pilot + full run)
+- `src/llm_structured_topic_modeling.py`: LLM-based structured topic extraction pipeline
+- `src/estimate_tokens.py`: Token and cost estimation utility for OpenAI models
+- `src/topic_model_evaluation.py`: Functions for computing topic model metrics
+- `src/topic_model_visualization.py`: Utilities for plotting topics and metrics
 
 ## Evaluation & Visualization
 

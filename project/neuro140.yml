@@ -1,0 +1,30 @@
+name: neuro140
+
+channels:
+- conda-forge
+
+dependencies:
+- ipython
+- jupyterlab
+- lxml
+- matplotlib
+- networkx
+- nltk
+- gensim
+- numpy
+- pandas
+- pillow
+- pip
+- pyarrow
+- python>=3.11
+- scikit-learn
+- scipy
+- seaborn
+- statsmodels
+- pytorch
+- tqdm
+- spacy
+- python-dotenv
+- openai
+- tiktoken
+
