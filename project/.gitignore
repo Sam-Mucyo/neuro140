@@ -1,0 +1,30 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+env/
+venv/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Data directories
+data/
+results/
+
+# Reports build artifacts
+reports/*.aux
+reports/*.log
+reports/*.out
+reports/*.synctex.gz
+reports/*.tex
+
+# Secrets and environment
+.env
+
+# IntelliJ / PyCharm
+.idea/
+
+# MacOS files
+.DS_Store
