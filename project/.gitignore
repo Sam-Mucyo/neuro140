@@ -18,7 +18,6 @@ reports/*.aux
 reports/*.log
 reports/*.out
 reports/*.synctex.gz
-reports/*.tex
 
 # Secrets and environment
 .env
