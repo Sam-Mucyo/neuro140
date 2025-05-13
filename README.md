@@ -20,8 +20,10 @@ This repository implements and compares traditional LDA topic modeling with an L
    ```bash
    git clone
    ```
-2. Follow the environment setup instructions in [`project/README.md`](./project/README.md) to create a virtual environment or Conda environment.
-3. Explore the analyses:
+2. Follow the environment setup instructions in [`project/README.md`](./project/README.md) to:
+   - create a virtual environment or Conda environment.
+   - Link to the Data Source
+4. Explore the analyses:
    - Notebooks: `project/experiments/`
    - Serial pipeline: `python project/src/llm_structured_topic_modeling.py`
    - Parallel pipeline: `python project/src/parallel_topic_modeling.py`
