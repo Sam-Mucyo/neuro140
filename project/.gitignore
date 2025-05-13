@@ -18,6 +18,12 @@ reports/*.aux
 reports/*.log
 reports/*.out
 reports/*.synctex.gz
+*.bbl 
+*.blg 
+*.fls 
+*.bib 
+*.fdb_latexmk
+
 
 # Secrets and environment
 .env
