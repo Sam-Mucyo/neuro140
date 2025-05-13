@@ -6,8 +6,6 @@ This script implements the pipeline, which uses LLMs to extract
 structured representations from mental health forum posts before applying LDA
 for topic modeling.
 
-What to Expect When Running
-
 The script will first validate if your OpenAI API key is available.
 
 It will then run a pilot test on 5 examples from the dataset, showing:
@@ -71,8 +69,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
 # Constants
-DATA_PATH = "data/mentalhealth_post_features_tfidf_256.csv"  # Path to the data file
-RESULTS_DIR = "results"  # Directory to store results
+DATA_PATH = "../data/mentalhealth_post_features_tfidf_256.csv"  # Path to the data file
+RESULTS_DIR = "../results"  # Directory to store results
 PILOT_SAMPLE_SIZE = 5  # Number of records to use for pilot testing
 RANDOM_SEED = 42  # Random seed for reproducibility
 
@@ -157,20 +155,20 @@ def lemmatize_text(text):
 def analyze_text(text):
     """
     Analyze a single text entry and return structured results using OpenAI's Structured Outputs feature.
-    
+
     Args:
         text: Text to analyze
-        
+
     Returns:
         Dictionary with structured analysis results
     """
     # Initialize OpenAI client
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    
+
     # Define the system prompt
     system_prompt = """You are an AI assistant trained to analyze mental health text data.
     Extract key information from the provided text and categorize it according to the schema."""
-    
+
     try:
         # Define the schema for structured output
         schema = {
@@ -179,58 +177,64 @@ def analyze_text(text):
                 "themes": {
                     "type": "array",
                     "description": "Main themes or topics identified in the text",
-                    "items": {"type": "string"}
+                    "items": {"type": "string"},
                 },
                 "emotional_tone": {
                     "type": "string",
                     "description": "Overall emotional tone of the text",
-                    "enum": ["positive", "negative", "neutral", "mixed", "unknown"]
+                    "enum": ["positive", "negative", "neutral", "mixed", "unknown"],
                 },
                 "concerns": {
                     "type": "array",
                     "description": "Key concerns or issues mentioned in the text",
-                    "items": {"type": "string"}
+                    "items": {"type": "string"},
                 },
                 "cognitive_patterns": {
                     "type": "array",
                     "description": "Any cognitive patterns or distortions identified in the text",
-                    "items": {"type": "string"}
+                    "items": {"type": "string"},
                 },
                 "social_context": {
                     "type": "array",
                     "description": "Social context or relationships mentioned in the text",
-                    "items": {"type": "string"}
-                }
+                    "items": {"type": "string"},
+                },
             },
-            "required": ["themes", "emotional_tone", "concerns", "cognitive_patterns", "social_context"],
-            "additionalProperties": False
+            "required": [
+                "themes",
+                "emotional_tone",
+                "concerns",
+                "cognitive_patterns",
+                "social_context",
+            ],
+            "additionalProperties": False,
         }
-        
+
         # Make the API call using the new Responses API with Structured Outputs
         response = client.responses.create(
             model="gpt-4o-mini",  # Using gpt-4o-mini for cost efficiency with Structured Outputs support
             input=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
+                {"role": "user", "content": text},
             ],
             text={
                 "format": {
                     "type": "json_schema",
                     "name": "mental_health_analysis",
                     "schema": schema,
-                    "strict": True
+                    "strict": True,
                 }
-            }
+            },
         )
-        
+
         # Extract the structured result
         structured_result = json.loads(response.output_text)
-        
+
         # Add the original text to the result
         structured_result["original_text"] = text
-        
+
         return structured_result
-    
+
     except Exception as e:
         print(f"Error analyzing text: {e}")
         # Return a minimal result in case of error
@@ -240,7 +244,7 @@ def analyze_text(text):
             "concerns": [],
             "cognitive_patterns": [],
             "social_context": [],
-            "original_text": text
+            "original_text": text,
         }
 
 
@@ -266,7 +270,9 @@ def create_structured_text(structured_data):
 
     # Add cognitive stress markers
     if structured_data.get("cognitive_patterns"):
-        structured_text += f"COGNITIVE: {', '.join(structured_data['cognitive_patterns'])} "
+        structured_text += (
+            f"COGNITIVE: {', '.join(structured_data['cognitive_patterns'])} "
+        )
 
     # Add suicidal red flags
     if structured_data.get("concerns"):
@@ -274,50 +280,89 @@ def create_structured_text(structured_data):
 
     # Add keywords
     if structured_data.get("social_context"):
-        keywords = ', '.join(structured_data["social_context"])
+        keywords = ", ".join(structured_data["social_context"])
         structured_text += f"KEYWORDS: {keywords}"
 
     return structured_text
 
 
-def process_batch(df, model=DEFAULT_MODEL):
+def process_batch(df, model=DEFAULT_MODEL, checkpoint_interval=50):
     """
     Process a batch of text entries.
-    
+
     Args:
         df: DataFrame containing the text data
         model: Model to use for analysis (must support Structured Outputs)
-        
+        checkpoint_interval: Save progress after processing this many records
+
     Returns:
         DataFrame with processed results
     """
     results = []
+    checkpoint_dir = os.path.join(RESULTS_DIR, "checkpoints")
     
+    # Create checkpoints directory if it doesn't exist
+    if not os.path.exists(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
+        print(f"Created checkpoints directory: {checkpoint_dir}")
+    
+    # Check if there are existing checkpoints
+    checkpoint_files = sorted([f for f in os.listdir(checkpoint_dir) if f.startswith("checkpoint_") and f.endswith(".csv")])
+    
+    if checkpoint_files:
+        latest_checkpoint = os.path.join(checkpoint_dir, checkpoint_files[-1])
+        print(f"Found checkpoint: {latest_checkpoint}")
+        checkpoint_df = pd.read_csv(latest_checkpoint)
+        results = checkpoint_df.to_dict('records')
+        processed_ids = set(checkpoint_df["id"].astype(str))
+        print(f"Resuming from checkpoint with {len(results)} already processed records")
+    else:
+        processed_ids = set()
+        print("No checkpoints found, starting from scratch")
+
     # Process each text entry
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing texts"):
+        # Skip already processed records
+        current_id = row["id"] if "id" in row else str(idx)
+        if current_id in processed_ids:
+            continue
+            
         text = row["post"]
         result = analyze_text(text)
-        
+
         # Add the index to the result
-        result["id"] = row["id"] if "id" in row else str(idx)
-        
+        result["id"] = current_id
+
         # Create structured text representation
         structured_text = create_structured_text(result)
         result["structured_text"] = structured_text
-        
+
         # Create tokens from structured text
         result["structured_tokens"] = lemmatize_text(structured_text)
-        
+
         # Create tokens from original text (for baseline comparison)
         result["processed_text"] = preprocess_text(text)
         result["baseline_tokens"] = lemmatize_text(result["processed_text"])
-        
+
         # Add to results
         results.append(result)
-    
+        processed_ids.add(current_id)
+        
+        # Save checkpoint periodically
+        if len(results) % checkpoint_interval == 0:
+            checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{len(results)}.csv")
+            temp_df = pd.DataFrame(results)
+            temp_df.to_csv(checkpoint_file, index=False)
+            print(f"Saved checkpoint with {len(results)} records to {checkpoint_file}")
+
     # Convert results to DataFrame
     results_df = pd.DataFrame(results)
     
+    # Save final checkpoint
+    final_checkpoint = os.path.join(checkpoint_dir, f"checkpoint_final_{len(results)}.csv")
+    results_df.to_csv(final_checkpoint, index=False)
+    print(f"Saved final checkpoint with {len(results_df)} records to {final_checkpoint}")
+
     return results_df
 
 
@@ -490,21 +535,21 @@ def run_pilot(df=None, skip_existing=True):
         Results of the pilot test
     """
     print(f"\n🧪 Running pilot test on {PILOT_SAMPLE_SIZE} records")
-    
+
     pilot_results_path = os.path.join(RESULTS_DIR, "pilot_results.csv")
-    
+
     # Load data if not provided
     if df is None:
         df = load_data()
-    
+
     # Take a deterministic sample using the random seed
     # Instead of head(), we use sample() with a fixed seed for deterministic selection
     sample_df = df.sample(PILOT_SAMPLE_SIZE, random_state=RANDOM_SEED)
-    
+
     # Ensure we have an 'id' column for tracking
-    if 'id' not in sample_df.columns:
-        sample_df['id'] = sample_df.index.astype(str)
-    
+    if "id" not in sample_df.columns:
+        sample_df["id"] = sample_df.index.astype(str)
+
     # Check if pilot results already exist and we want to skip processing
     existing_results_df = None
     if skip_existing and os.path.exists(pilot_results_path):
@@ -512,13 +557,17 @@ def run_pilot(df=None, skip_existing=True):
         try:
             existing_results_df = pd.read_csv(pilot_results_path)
             print(f"Loaded {len(existing_results_df)} existing pilot results")
-            
+
             # If we have all the posts we need already processed, return them
-            if set(sample_df['id'].astype(str)).issubset(set(existing_results_df['id'].astype(str))):
+            if set(sample_df["id"].astype(str)).issubset(
+                set(existing_results_df["id"].astype(str))
+            ):
                 print("All selected posts have already been processed")
                 # Filter to only include the posts in our current sample
                 filtered_results = existing_results_df[
-                    existing_results_df['id'].astype(str).isin(sample_df['id'].astype(str))
+                    existing_results_df["id"]
+                    .astype(str)
+                    .isin(sample_df["id"].astype(str))
                 ]
                 return filtered_results
             else:
@@ -531,23 +580,27 @@ def run_pilot(df=None, skip_existing=True):
     # Process the sample, skipping any already processed posts
     if existing_results_df is not None:
         # Find posts that need processing
-        already_processed_ids = set(existing_results_df['id'].astype(str))
-        new_posts_df = sample_df[~sample_df['id'].astype(str).isin(already_processed_ids)]
-        
+        already_processed_ids = set(existing_results_df["id"].astype(str))
+        new_posts_df = sample_df[
+            ~sample_df["id"].astype(str).isin(already_processed_ids)
+        ]
+
         if len(new_posts_df) > 0:
             print(f"Processing {len(new_posts_df)} new posts")
             new_results_df = process_batch(new_posts_df)
-            
+
             # Combine with existing results
             existing_to_keep = existing_results_df[
-                existing_results_df['id'].astype(str).isin(sample_df['id'].astype(str))
+                existing_results_df["id"].astype(str).isin(sample_df["id"].astype(str))
             ]
-            results_df = pd.concat([existing_to_keep, new_results_df], ignore_index=True)
+            results_df = pd.concat(
+                [existing_to_keep, new_results_df], ignore_index=True
+            )
         else:
             print("No new posts to process")
             # Filter existing results to only include our current sample
             results_df = existing_results_df[
-                existing_results_df['id'].astype(str).isin(sample_df['id'].astype(str))
+                existing_results_df["id"].astype(str).isin(sample_df["id"].astype(str))
             ]
     else:
         # Process all posts in the sample
@@ -646,7 +699,7 @@ def run_topic_modeling(processed_df, use_structured=True, num_topics=None):
     return dictionary, corpus, lda_model
 
 
-def run_full_pipeline(df=None, sample_size=None, skip_existing=True):
+def run_full_pipeline(df=None, skip_existing=True):
     """
     Run the full pipeline on all data or a sample.
 
@@ -660,23 +713,18 @@ def run_full_pipeline(df=None, sample_size=None, skip_existing=True):
     """
     print("\n🚀 Running full pipeline")
     start_time = time.time()
-    
+
     # Define the path for processed data
     processed_data_path = os.path.join(RESULTS_DIR, "processed_data.csv")
-    
+
     # Load data if not provided
     if df is None:
         df = load_data()
 
-    # Take a sample if requested - using the fixed random seed for deterministic sampling
-    if sample_size is not None:
-        print(f"Using a deterministic sample of {sample_size} records (seed: {RANDOM_SEED})")
-        df = df.sample(sample_size, random_state=RANDOM_SEED)
-    
     # Ensure we have an 'id' column for tracking
-    if 'id' not in df.columns:
-        df['id'] = df.index.astype(str)
-    
+    if "id" not in df.columns:
+        df["id"] = df.index.astype(str)
+
     # Check if processed data already exists and we want to skip processing
     existing_processed_df = None
     if skip_existing and os.path.exists(processed_data_path):
@@ -684,23 +732,27 @@ def run_full_pipeline(df=None, sample_size=None, skip_existing=True):
         try:
             existing_processed_df = pd.read_csv(processed_data_path)
             print(f"Loaded {len(existing_processed_df)} existing processed records")
-            
+
             # Check if all the posts we need are already processed
-            current_ids = set(df['id'].astype(str))
-            existing_ids = set(existing_processed_df['id'].astype(str))
-            
+            current_ids = set(df["id"].astype(str))
+            existing_ids = set(existing_processed_df["id"].astype(str))
+
             if current_ids.issubset(existing_ids):
                 print("All selected posts have already been processed")
                 # Filter to only include the posts in our current selection
                 filtered_results = existing_processed_df[
-                    existing_processed_df['id'].astype(str).isin(df['id'].astype(str))
+                    existing_processed_df["id"].astype(str).isin(df["id"].astype(str))
                 ]
-                
+
                 # Run topic modeling on filtered data
                 print("\nRunning topic modeling with existing processed data...")
-                structured_results = run_topic_modeling(filtered_results, use_structured=True)
-                baseline_results = run_topic_modeling(filtered_results, use_structured=False)
-                
+                structured_results = run_topic_modeling(
+                    filtered_results, use_structured=True
+                )
+                baseline_results = run_topic_modeling(
+                    filtered_results, use_structured=False
+                )
+
                 return filtered_results, structured_results, baseline_results
         except Exception as e:
             print(f"Error loading existing processed data: {e}")
@@ -710,23 +762,25 @@ def run_full_pipeline(df=None, sample_size=None, skip_existing=True):
     # Process data, skipping any already processed posts
     if existing_processed_df is not None:
         # Find posts that need processing
-        already_processed_ids = set(existing_processed_df['id'].astype(str))
-        new_posts_df = df[~df['id'].astype(str).isin(already_processed_ids)]
-        
+        already_processed_ids = set(existing_processed_df["id"].astype(str))
+        new_posts_df = df[~df["id"].astype(str).isin(already_processed_ids)]
+
         if len(new_posts_df) > 0:
             print(f"Processing {len(new_posts_df)} new posts")
             new_results_df = process_batch(new_posts_df)
-            
+
             # Combine with existing results that are in our current selection
             existing_to_keep = existing_processed_df[
-                existing_processed_df['id'].astype(str).isin(df['id'].astype(str))
+                existing_processed_df["id"].astype(str).isin(df["id"].astype(str))
             ]
-            processed_df = pd.concat([existing_to_keep, new_results_df], ignore_index=True)
+            processed_df = pd.concat(
+                [existing_to_keep, new_results_df], ignore_index=True
+            )
         else:
             print("No new posts to process")
             # Filter existing results to only include our current selection
             processed_df = existing_processed_df[
-                existing_processed_df['id'].astype(str).isin(df['id'].astype(str))
+                existing_processed_df["id"].astype(str).isin(df["id"].astype(str))
             ]
     else:
         # Process all posts
@@ -755,36 +809,27 @@ def run_full_pipeline(df=None, sample_size=None, skip_existing=True):
     return processed_df, structured_results, baseline_results
 
 
-def main():
-    """Main entry point for the pipeline."""
-    # Validate API keys
-    if not OPENAI_API_KEY:
-        print("⚠️ Warning: OpenAI API key not found in environment variables.")
-        print(
-            "Please set the OPENAI_API_KEY environment variable or add it to a .env file."
-        )
-    else:
-        print("✅ OpenAI API key loaded successfully.")
+# Validate API keys
+if not OPENAI_API_KEY:
+    print("⚠️ Warning: OpenAI API key not found in environment variables.")
+    print(
+        "Please set the OPENAI_API_KEY environment variable or add it to a .env file."
+    )
+else:
+    print("✅ OpenAI API key loaded successfully.")
 
-    # Ask if we should skip existing processed data
-    skip_existing = input("Skip processing if results already exist? (y/n, default: y): ").lower() != "n"
-    
-    # Run the pilot test
-    pilot_df = run_pilot(skip_existing=skip_existing)
+# Ask if we should skip existing processed data
+skip_existing = (
+    input("Skip processing if results already exist? (y/n, default: y): ").lower()
+    != "n"
+)
 
-    # Ask for confirmation before running the full pipeline
-    user_input = input("\nProceed with full pipeline run? (y/n): ")
+# Run the pilot test
+run_pilot(skip_existing=skip_existing)
 
-    if user_input.lower() == "y":
-        # Run the full pipeline with a limited sample for demonstration
-        sample_size = int(input("Enter sample size (or 0 for all data): "))
-        if sample_size <= 0:
-            sample_size = None
+user_input = input("\nProceed with full pipeline run? (y/n): ")
 
-        run_full_pipeline(sample_size=sample_size, skip_existing=skip_existing)
-    else:
-        print("Full pipeline run cancelled")
-
-
-if __name__ == "__main__":
-    main()
+if user_input.lower() == "y":
+    run_full_pipeline(skip_existing=skip_existing)
+else:
+    print("Full pipeline run cancelled")
