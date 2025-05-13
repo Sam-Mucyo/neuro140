@@ -1,6 +1,8 @@
 .DS_Store
 env
 project/data
+project/backups
+project/reports/sources
 
 *.aux
 *.out
