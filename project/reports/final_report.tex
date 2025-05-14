@@ -69,6 +69,9 @@ We also built a lightweight web app for human evaluation via \emph{document‑in
 Although we have not yet gathered enough responses to report quantitative results, readers can experiment with the demo at our \href{https://sammucyo.com/doc-intrusion-test/}{interactive document‑intrusion site}.
 
 
+\subsection{Implementation Challenges}
+
+Processing thousands of posts with GPT-4 presented significant technical challenges, including API rate limits and long processing times. We addressed these by developing a parallel processing pipeline that distributes work across multiple CPU cores while implementing exponential backoff for API rate limit handling. After benchmarking on sample documents, we found that our original, serial pipeline—which processes each post in about 3-5 seconds would require roughly 15--18 hours to handle all \(10{,}000+\) posts (and could stretch past 20 hours in the worst case), posing significant risks of lengthy runtimes and lost progress if interrupted. By contrast, our parallel pipeline shards LLM calls across multiple worker processes, employs exponential backoff to gracefully handle API rate limits, and checkpoints intermediate results to enable robust, resumable execution—bringing the end-to-end runtime down to under 90 minutes, a roughly ten-fold throughput improvement.
 
 
 % ==========================
